@@ -5,7 +5,7 @@ date: "2/11/2020"
 output: pdf_document
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=TRUE, warning=FALSE, message=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 library(here)
@@ -21,7 +21,7 @@ library(ipred)
 ##Decision Trees
 
 1. Setup
-```{r}
+```{r, message=FALSE}
 set.seed(1414)
 nes <- read_csv(here("data/nes2008.csv"))
 
@@ -35,30 +35,13 @@ lambda <- seq(0.0001, .04, .001)
 
 2. Create Training and Test Sets
 ```{r}
-nes
-nes_rows <- as.data.frame(seq(1, 1807, 1)) %>%
-  rename(all_rows = `seq(1, 1807, 1)`)
-train <- as.data.frame(sample(1:1807, (1807*.75)))
-
-train_test_sets <- train %>%
-  rename(row = `sample(1:1807, (1807 * 0.75))`) %>%
-  arrange(row) %>%
-  mutate(set = "train") %>%
-  right_join(nes_rows, by = c("row" = "all_rows")) %>%
-  mutate(set = if_else(is.na(set), "test", set))
-
 train2 <- sample(1:nrow(nes), (1807*.75))
-str(train2)
-head(train_test_sets)
+##I will use all the rows that are NOT in train2 as my test set later on by subsetting out the training rows
 ```
 
 
 ##3. Boosting w/ 1000 trees
 ```{r}
-nes_rf <- randomForest(biden ~ .,
-                   data = nes,
-                   subset = train2)
-
 ##Run Boost on Training data
 boosted_tree_train <- function(lambda){
   model <- gbm(biden ~ .,
@@ -99,8 +82,6 @@ boost_test_list <- map_dbl(lambda, boosted_tree_test)
 boost_test_mses <- as.data.frame(cbind(lambda, boost_test_list)) %>%
   rename(mse = `boost_test_list`)
 
-boost_test_mses$lambda[which.min(boost_test_mses$mse)]
-
 ggplot() +
   geom_point(data = boost_train_mses, mapping = aes(lambda, mse), color = "blue") +
   geom_line(data = boost_train_mses, mapping = aes(lambda, mse), color = "blue") +
@@ -115,8 +96,9 @@ ggplot() +
 
 ##Question 4. Fix Lambda
 ```{r}
-boosted_tree_test(.01)
+mse_01 <- boosted_tree_test(.01)
 ```
+The test MSE for the boosting procedure with a $\lambda$ of .01 is `r mse_01`. This result is approxiamtely in line with our expected resukts, considering the MSEs for $\lambda$ values of .0091 and .0101 produced in Question 3. The MSE for a $\lambda$ of .01 is slightly higher than these other values, however, highlighting the importance of estimating models with a range of shrinkage values to identify the ideal model.
 
 ##Question 5. Apply Bagging
 ```{r}
@@ -132,6 +114,7 @@ bag_mse <- mean((nes[-train2,]$biden-bag_preds)^2)
 bag_mse
 
 ```
+The test set MSE for the bagging approach is `r bag_mse`.
 
 ##Question 6. Apply Random Forest
 ```{r}
@@ -146,6 +129,7 @@ rf_mse <- mean((nes[-train2,]$biden-rf_preds)^2)
   
 rf_mse
 ```
+The test set MSE for the random forest approach is `r rf_mse`.
 
 ##Question 7. Apply Linear Regression
 ```{r}
@@ -160,6 +144,8 @@ lm_mse <- mean((nes[-train2,]$biden-lm_preds)^2)
   
 lm_mse
 ```
+The test set MSE for linear regression is `r lm_mse`.
+
 
 ##Question 8
 
@@ -187,29 +173,34 @@ oj_test <- OJ[-train_num,]
 ```
 
 ##Question 2. Fit SV Classifier
-```{r}
+```{r, message=FALSE}
 library(e1071)
 svmfit_oj <- svm(Purchase ~ ., 
              data = oj_train, 
              kernel = "linear", 
              cost = .01)
 
-summary(svmfit_oj)
 ```
-
+DISCUSS THE RESULTS
 
 ##Question 3. Display Confusion Matrix
 ```{r}
 class_pred <- predict(svmfit_oj, oj_test)
 confusion_matrix <- table(predicted = class_pred, true = oj_test$Purchase)
 
-test_error <- sum(confusion_matrix[row(confusion_matrix) != col(confusion_matrix)]) / sum(confusion_matrix)
+test_error <- sum(confusion_matrix[row(confusion_matrix) !=
+                                     col(confusion_matrix)]) / sum(confusion_matrix)
 
 class_pred_train <- predict(svmfit_oj, oj_train)
 confusion_matrix_train <- table(predicted = class_pred_train, true = oj_train$Purchase)
-train_error <- sum(confusion_matrix_train[row(confusion_matrix_train) != col(confusion_matrix_train)]) / sum(confusion_matrix_train)
+train_error <- sum(confusion_matrix_train[row(confusion_matrix_train) !=
+                                            col(confusion_matrix_train)]) / sum(confusion_matrix_train)
+
+confusion_matrix
 
 ```
+The training error rate is `r train_error` and the test error rate is `r test_error`.
+
 
 ##Question 4. Find Optimal Cost
 ```{r}
@@ -219,12 +210,43 @@ tune_oj <- tune(svm,
                 kernel = "linear", 
                 ranges = list(cost = c(0.001, 0.01, 0.1, 1, 5, 10, 100, 1000)))
 
-# CV errors
-summary(tune_c)
-
 # best?
-tuned_model <- tune_c$best.model
+tuned_model <- tune_oj$best.model
 summary(tuned_model)
+
+##Let's re-tune around the .1 value
+tune_oj2 <- tune(svm, 
+                Purchase ~ ., 
+                data = oj_train, 
+                kernel = "linear", 
+                ranges = list(cost = seq(.01, .4, .01)))
+
+tuned_model2 <- tune_oj2$best.model
+
+```
+The optimal cost of the model is `r tuned_model2$cost`.
+
+
+##Question 5. Compute New Training and Test Error Rates for New Cost
+```{r}
+svmfit_oj_tuned_cost <- svm(Purchase ~ ., 
+             data = oj_train, 
+             kernel = "linear", 
+             cost = .04)
+
+
+class_pred_tuned <- predict(svmfit_oj_tuned_cost, oj_test)
+confusion_matrix_tuned <- table(predicted = class_pred_tuned, true = oj_test$Purchase)
+
+test_error_tuned <- sum(confusion_matrix_tuned[row(confusion_matrix_tuned) != col(confusion_matrix_tuned)]) / sum(confusion_matrix_tuned)
+
+class_pred_train_tuned <- predict(svmfit_oj_tuned_cost, oj_train)
+
+confusion_matrix_train_tuned <- table(predicted = class_pred_train_tuned, true = oj_train$Purchase)
+
+train_error_tuned <- sum(confusion_matrix_train_tuned[row(confusion_matrix_train_tuned) != col(confusion_matrix_train_tuned)]) / sum(confusion_matrix_train_tuned)
+
+confusion_matrix_tuned
 ```
 
-
+The training set error rate for the tuned model is `r train_error_tuned` and the test set error rate for the tuned model is `r test_error_tuned`. This is slightly better than the naive model with a cost of .01, which had training and test error rates of `r train_error` and `r test_error`, respectively. In substantive terms, this difference is quite minimal -- the tuned model correctly classified exactly one observation more than the naive model for the test set (out of  270 observations). It did, however, classify eight more observations correctly than the naive model for the training set. While the performance of the tuned classifier is, at best, marginally better than the naive classifier, I would argue that it is still better to leverage the tuned model because of the minimal resources and time required to acheive a slightly better predictor.
